@@ -1048,7 +1048,7 @@ static void log_bad_mem_write(int diff, u32 size, void* __user bp, u32 stack_dep
 	void* __user p = ((u8* __user)bp) + diff - stack_depth;
 	pr_warn("Bad mem write at %px, sz = %d (BP=%px, stack_depth=%d)\n", p, size, bp, stack_depth);
 }
-static void emit_verify_mem_write(u8** pprog, u32 addr_reg, u32 index_reg, int off, u32 size, u32 stack_depth)
+static void emit_verify_mem_write(u8** pprog, u32 addr_reg, u32 index_reg, int off, u32 size, u32 stack_depth, bool* should_not_run_due_to_bad_runtime)
 {
 	if (stack_depth + 1 == 0)
 		return;
@@ -1107,6 +1107,12 @@ static void emit_verify_mem_write(u8** pprog, u32 addr_reg, u32 index_reg, int o
 	u64 addr = (u64)&log_bad_mem_write;
 	emit_mov_imm64(&prog, X86_REG_R9, (addr >> 32), addr & 0xffffffff);
 	EMIT3(0x41, 0xff, 0xd1);
+
+	/* movabsq should_not_run_due_to_bad_runtime, %r9 ; should_not_run_due_to_bad_runtime = true
+	 * movb 0x1, (%r9) */
+	addr = (u64)should_not_run_due_to_bad_runtime;
+	emit_mov_imm64(&prog, X86_REG_R9, (addr >> 32), addr & 0xffffffff);
+	EMIT4(0x41, 0xC6, 0x01, 0x01);
 
 	/* leave; ret */
 	EMIT2(0xC9, 0xC3);
@@ -1201,11 +1207,11 @@ static void emit_ldx_r12(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off
 }
 
 /* STX: *(u8*)(dst_reg + off) = src_reg */
-static void emit_stx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off, u32 stack_depth)
+static void emit_stx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off, u32 stack_depth, bool* should_not_run_due_to_bad_runtime)
 {
 	u8 *prog = *pprog;
 
-	emit_verify_mem_write(&prog, dst_reg, -1, off, size, stack_depth);
+	emit_verify_mem_write(&prog, dst_reg, -1, off, size, stack_depth, should_not_run_due_to_bad_runtime);
 
 	switch (size) {
 	case BPF_B:
@@ -1237,11 +1243,11 @@ static void emit_stx(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off, u3
 }
 
 /* STX: *(u8*)(dst_reg + index_reg + off) = src_reg */
-static void emit_stx_index(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, u32 index_reg, int off, u32 stack_depth)
+static void emit_stx_index(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, u32 index_reg, int off, u32 stack_depth, bool* should_not_run_due_to_bad_runtime)
 {
 	u8 *prog = *pprog;
 
-	emit_verify_mem_write(&prog, dst_reg, index_reg, off, size, stack_depth);
+	emit_verify_mem_write(&prog, dst_reg, index_reg, off, size, stack_depth, should_not_run_due_to_bad_runtime);
 
 	switch (size) {
 	case BPF_B:
@@ -1265,17 +1271,17 @@ static void emit_stx_index(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, u32 i
 	*pprog = prog;
 }
 
-static void emit_stx_r12(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off, u32 stack_depth)
+static void emit_stx_r12(u8 **pprog, u32 size, u32 dst_reg, u32 src_reg, int off, u32 stack_depth, bool* should_not_run_due_to_bad_runtime)
 {
-	emit_stx_index(pprog, size, dst_reg, src_reg, X86_REG_R12, off, stack_depth);
+	emit_stx_index(pprog, size, dst_reg, src_reg, X86_REG_R12, off, stack_depth, should_not_run_due_to_bad_runtime);
 }
 
 /* ST: *(u8*)(dst_reg + index_reg + off) = imm32 */
-static void emit_st_index(u8 **pprog, u32 size, u32 dst_reg, u32 index_reg, int off, int imm, u32 stack_depth)
+static void emit_st_index(u8 **pprog, u32 size, u32 dst_reg, u32 index_reg, int off, int imm, u32 stack_depth, bool* should_not_run_due_to_bad_runtime)
 {
 	u8 *prog = *pprog;
 
-	emit_verify_mem_write(&prog, dst_reg, index_reg, off, size, stack_depth);
+	emit_verify_mem_write(&prog, dst_reg, index_reg, off, size, stack_depth, should_not_run_due_to_bad_runtime);
 
 	switch (size) {
 	case BPF_B:
@@ -1300,9 +1306,9 @@ static void emit_st_index(u8 **pprog, u32 size, u32 dst_reg, u32 index_reg, int 
 	*pprog = prog;
 }
 
-static void emit_st_r12(u8 **pprog, u32 size, u32 dst_reg, int off, int imm, u32 stack_depth)
+static void emit_st_r12(u8 **pprog, u32 size, u32 dst_reg, int off, int imm, u32 stack_depth, bool* should_not_run_due_to_bad_runtime)
 {
-	emit_st_index(pprog, size, dst_reg, X86_REG_R12, off, imm, stack_depth);
+	emit_st_index(pprog, size, dst_reg, X86_REG_R12, off, imm, stack_depth, should_not_run_due_to_bad_runtime);
 }
 
 static int emit_atomic(u8 **pprog, u8 atomic_op,
@@ -1962,7 +1968,7 @@ st:			if (is_imm8(insn->off))
 		case BPF_STX | BPF_MEM | BPF_H:
 		case BPF_STX | BPF_MEM | BPF_W:
 		case BPF_STX | BPF_MEM | BPF_DW:
-			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off, bpf_prog->aux->stack_depth);
+			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off, bpf_prog->aux->stack_depth, &bpf_prog->aux->should_not_run_due_to_bad_runtime);
 			break;
 
 		case BPF_ST | BPF_PROBE_MEM32 | BPF_B:
@@ -1970,7 +1976,7 @@ st:			if (is_imm8(insn->off))
 		case BPF_ST | BPF_PROBE_MEM32 | BPF_W:
 		case BPF_ST | BPF_PROBE_MEM32 | BPF_DW:
 			start_of_ldx = prog;
-			emit_st_r12(&prog, BPF_SIZE(insn->code), dst_reg, insn->off, insn->imm, bpf_prog->aux->stack_depth);
+			emit_st_r12(&prog, BPF_SIZE(insn->code), dst_reg, insn->off, insn->imm, bpf_prog->aux->stack_depth, &bpf_prog->aux->should_not_run_due_to_bad_runtime);
 			goto populate_extable;
 
 			/* LDX: dst_reg = *(u8*)(src_reg + r12 + off) */
@@ -1986,7 +1992,7 @@ st:			if (is_imm8(insn->off))
 			if (BPF_CLASS(insn->code) == BPF_LDX)
 				emit_ldx_r12(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off);
 			else
-				emit_stx_r12(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off, bpf_prog->aux->stack_depth);
+				emit_stx_r12(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off, bpf_prog->aux->stack_depth, &bpf_prog->aux->should_not_run_due_to_bad_runtime);
 populate_extable:
 			{
 				struct exception_table_entry *ex;
@@ -2649,7 +2655,7 @@ static void save_args(const struct btf_func_model *m, u8 **prog,
 				emit_ldx(prog, BPF_DW, BPF_REG_0, BPF_REG_FP,
 					 nr_stack_slots * 8 + 0x18);
 				emit_stx(prog, BPF_DW, BPF_REG_FP, BPF_REG_0,
-					 -stack_size, -1);
+					 -stack_size, -1, NULL);
 
 				if (!nr_stack_slots)
 					first_off = stack_size;
@@ -2670,7 +2676,7 @@ static void save_args(const struct btf_func_model *m, u8 **prog,
 			for (j = 0; j < arg_regs; j++) {
 				emit_stx(prog, BPF_DW, BPF_REG_FP,
 					 nr_regs == 5 ? X86_REG_R9 : BPF_REG_1 + nr_regs,
-					 -stack_size, -1);
+					 -stack_size, -1, NULL);
 				stack_size -= 8;
 				nr_regs++;
 			}
@@ -2733,7 +2739,7 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 	 *
 	 * mov QWORD PTR [rbp - run_ctx_off + ctx_cookie_off], rdi
 	 */
-	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_1, -run_ctx_off + ctx_cookie_off, -1);
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_1, -run_ctx_off + ctx_cookie_off, -1, NULL);
 
 	/* arg1: mov rdi, progs[i] */
 	emit_mov_imm64(&prog, BPF_REG_1, (long) p >> 32, (u32) (long) p);
@@ -2779,7 +2785,7 @@ static int invoke_bpf_prog(const struct btf_func_model *m, u8 **pprog,
 	 * value of BPF_PROG_TYPE_STRUCT_OPS prog.
 	 */
 	if (save_ret)
-		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8, -1);
+		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8, -1, NULL);
 
 	/* replace 2 nops with JE insn, since jmp target is known */
 	jmp_insn[0] = X86_JE;
@@ -2856,7 +2862,7 @@ static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 	 * Set this to 0 to avoid confusing the program.
 	 */
 	emit_mov_imm32(&prog, false, BPF_REG_0, 0);
-	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8, -1);
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8, -1, NULL);
 	for (i = 0; i < tl->nr_links; i++) {
 		if (invoke_bpf_prog(m, &prog, tl->links[i], stack_size, run_ctx_off, true,
 				    image, rw_image))
@@ -3081,14 +3087,14 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	if (flags & BPF_TRAMP_F_TAIL_CALL_CTX)
 		EMIT1(0x50);		/* push rax */
 	/* mov QWORD PTR [rbp - rbx_off], rbx */
-	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_6, -rbx_off, -1);
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_6, -rbx_off, -1, NULL);
 
 	/* Store number of argument registers of the traced function:
 	 *   mov rax, nr_regs
 	 *   mov QWORD PTR [rbp - nregs_off], rax
 	 */
 	emit_mov_imm64(&prog, BPF_REG_0, 0, (u32) nr_regs);
-	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -nregs_off, -1);
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -nregs_off, -1, NULL);
 
 	if (flags & BPF_TRAMP_F_IP_ARG) {
 		/* Store IP address of the traced function:
@@ -3096,7 +3102,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		 * mov QWORD PTR [rbp - ip_off], rax
 		 */
 		emit_mov_imm64(&prog, BPF_REG_0, (long) func_addr >> 32, (u32) (long) func_addr);
-		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -ip_off, -1);
+		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -ip_off, -1, NULL);
 	}
 
 	save_args(m, &prog, regs_off, false);
@@ -3152,7 +3158,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 			}
 		}
 		/* remember return value in a stack for bpf prog to access */
-		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8, -1);
+		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8, -1, NULL);
 		im->ip_after_call = image + (prog - (u8 *)rw_image);
 		emit_nops(&prog, X86_PATCH_SIZE);
 	}

@@ -2770,6 +2770,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	prog->aux->dst_prog = dst_prog;
 	prog->aux->dev_bound = !!attr->prog_ifindex;
 	prog->aux->xdp_has_frags = attr->prog_flags & BPF_F_XDP_HAS_FRAGS;
+	prog->aux->should_not_run_due_to_bad_runtime = false;
 
 	/* move token into prog->aux, reuse taken refcnt */
 	prog->aux->token = token;

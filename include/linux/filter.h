@@ -705,6 +705,8 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 
 static __always_inline u32 bpf_prog_run(const struct bpf_prog *prog, const void *ctx)
 {
+	if (prog->aux->should_not_run_due_to_bad_runtime)
+		return -EFAULT;
 	return __bpf_prog_run(prog, ctx, bpf_dispatcher_nop_func);
 }
 

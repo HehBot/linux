@@ -1547,6 +1547,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	bool should_not_run_due_to_bad_runtime;
 };
 
 struct bpf_prog {
