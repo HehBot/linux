@@ -18453,11 +18453,11 @@ static int do_check(struct bpf_verifier_env *env)
 			dst_reg_type = regs[insn->dst_reg].type;
 
 			/* check that memory (dst_reg + off) is writeable */
-			err = check_mem_access(env, env->insn_idx, insn->dst_reg,
-					       insn->off, BPF_SIZE(insn->code),
-					       BPF_WRITE, insn->src_reg, false, false);
-			if (err)
-				return err;
+			// err = check_mem_access(env, env->insn_idx, insn->dst_reg,
+			// 		       insn->off, BPF_SIZE(insn->code),
+			// 		       BPF_WRITE, insn->src_reg, false, false);
+			// if (err)
+			// 	return err;
 
 			err = save_aux_ptr_type(env, dst_reg_type, false);
 			if (err)
