@@ -335,7 +335,7 @@ out:
 
 #ifdef CONFIG_CPU_SUP_AMD
 static const char errata93_warning[] =
-KERN_ERR 
+KERN_ERR
 "******* Your BIOS seems to not contain a fix for K8 errata #93\n"
 "******* Working around it, but it may cause SEGVs or burn power.\n"
 "******* Please consider a BIOS update.\n"
@@ -726,6 +726,9 @@ kernelmode_fixup_or_oops(struct pt_regs *regs, unsigned long error_code,
 
 	/* Are we prepared to handle this kernel fault? */
 	if (fixup_exception(regs, X86_TRAP_PF, error_code, address))
+		return;
+
+	if (arch_fixup_bad_bpf(regs->ip, error_code, address))
 		return;
 
 	/*

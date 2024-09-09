@@ -1298,6 +1298,7 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
 int arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int num_funcs);
+int arch_fixup_bad_bpf(unsigned long ip, unsigned long error_code, unsigned long address);
 
 /*
  * When the architecture supports STATIC_CALL replace the bpf_dispatcher_fn

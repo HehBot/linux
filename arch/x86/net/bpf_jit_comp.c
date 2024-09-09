@@ -1046,7 +1046,7 @@ static void maybe_emit_1mod(u8 **pprog, u32 reg, bool is64)
 static void log_bad_mem_write(int diff, u32 size, void* __user bp, u32 stack_depth)
 {
 	void* __user p = ((u8* __user)bp) + diff - stack_depth;
-	pr_warn("Bad mem write at %px, sz = %d (BP=%px, stack_depth=%d)\n", p, size, bp, stack_depth);
+	pr_warn("Bad mem write in BPF program to %px, sz = %d (BP=%px, stack_depth=%d)\n", p, size, bp, stack_depth);
 }
 static void emit_verify_mem_write(u8** pprog, u32 addr_reg, u32 index_reg, int off, u32 size, u32 stack_depth, bool* should_not_run_due_to_bad_runtime)
 {
@@ -3736,4 +3736,56 @@ bool bpf_jit_supports_ptr_xchg(void)
 u64 bpf_arch_uaddress_limit(void)
 {
 	return 0;
+}
+
+static int modify_exec_memory(unsigned long ip, void const* new_code, size_t size)
+{
+	struct mm_struct* mm = current->mm;
+	pgd_t* pgd = pgd_offset(mm, ip);
+	if (pgd_none(*pgd) || pgd_bad(*pgd))
+		return 0;
+	p4d_t* p4d = p4d_offset(pgd, ip);
+	if (p4d_none(*p4d) || p4d_bad(*p4d))
+		return 0;
+	pud_t* pud = pud_offset(p4d, ip);
+	if (pud_none(*pud) || pud_bad(*pud))
+		return 0;
+	pmd_t* pmd = pmd_offset(pud, ip);
+	if (pmd_none(*pmd) || pmd_bad(*pmd))
+		return 0;
+	pte_t* pte = pte_offset_kernel(pmd, ip);
+	if (!pte || pte_none(*pte))
+		return 0;
+
+	set_pte_at(mm, ip, pte, pte_mkwrite_novma(*pte));
+	memcpy((void*)ip, new_code, size);
+	set_pte_at(mm, ip, pte, pte_wrprotect(*pte));
+
+	flush_icache_range(ip, ip + size);
+	return 1;
+}
+
+int arch_fixup_bad_bpf(unsigned long ip, unsigned long error_code, unsigned long address)
+{
+	struct bpf_prog* prog = bpf_prog_ksym_find(ip);
+	if (prog == NULL)
+		return 0;
+
+	/* Mark BPF program as bad */
+	prog->aux->should_not_run_due_to_bad_runtime = true;
+
+	pr_warn("Bad mem read in BPF program at address 0x%lx from 0x%lx\n", ip, address);
+
+	if (prog->jited) {
+		/* Modify mem access code to instead exit BPF program */
+		u8 new_code[] = { 0xC9, 0xC3 };	// leave; ret
+		if (!modify_exec_memory(ip, &new_code[0], sizeof(new_code))) {
+			pr_crit("kernel failed to modify errant BPF program 0x%px", prog);
+		}
+	} else {
+		/* Don't know what to do for interpreter programs ¯\_(ツ)_/¯ */
+		panic("BPF program read fault for interpreter not implemented!");
+	}
+
+	return 1;
 }
